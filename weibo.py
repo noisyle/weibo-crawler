@@ -72,7 +72,16 @@ class Weibo(object):
         cookie = config.get('cookie')  # 微博cookie，可填可不填
         user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.111 Safari/537.36'
         self.headers = {'User_Agent': user_agent, 'Cookie': cookie}
-        self.mysql_config = config.get('mysql_config')  # MySQL数据库连接配置，可以不填
+        self.mysql_config = config.get('mysql_config', {
+            "host": "localhost",
+            "port": 3306,
+            "db": "weibo",
+            "user": "root",
+            "password": "password",
+            "charset": "utf8mb4"
+        })  # MySQL数据库连接配置，可以不填
+        self.mysql_prefix = config.get('mysql_prefix') or ''
+
         user_id_list = config['user_id_list']
         query_list = config.get('query_list') or []
         if isinstance(query_list, str):
@@ -224,45 +233,11 @@ class Weibo(object):
 
     def user_to_mysql(self):
         """将爬取的用户信息写入MySQL数据库"""
-        mysql_config = {
-            'host': 'localhost',
-            'port': 3306,
-            'user': 'root',
-            'password': '123456',
-            'charset': 'utf8mb4'
-        }
         # 创建'weibo'数据库
-        create_database = """CREATE DATABASE IF NOT EXISTS weibo DEFAULT
-                         CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"""
-        self.mysql_create_database(mysql_config, create_database)
+        self.mysql_create_database()
         # 创建'user'表
-        create_table = """
-                CREATE TABLE IF NOT EXISTS user (
-                id varchar(20) NOT NULL,
-                screen_name varchar(30),
-                gender varchar(10),
-                statuses_count INT,
-                followers_count INT,
-                follow_count INT,
-                registration_time varchar(20),
-                sunshine varchar(20),
-                birthday varchar(40),
-                location varchar(200),
-                education varchar(200),
-                company varchar(200),
-                description varchar(400),
-                profile_url varchar(200),
-                profile_image_url varchar(200),
-                avatar_hd varchar(200),
-                urank INT,
-                mbrank INT,
-                verified BOOLEAN DEFAULT 0,
-                verified_type INT,
-                verified_reason varchar(140),
-                PRIMARY KEY (id)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"""
-        self.mysql_create_table(mysql_config, create_table)
-        self.mysql_insert(mysql_config, 'user', [self.user])
+        self.mysql_create_table('user')
+        self.mysql_insert('user', [self.user])
         logger.info(u'%s信息写入MySQL数据库完毕', self.user['screen_name'])
 
     def user_to_database(self):
@@ -536,10 +511,15 @@ class Weibo(object):
             else:
                 describe = u'视频'
                 key = 'video_url'
-            if weibo_type == 'original':
-                describe = u'原创微博' + describe
+
+            if self.result_dir_name:
+                describe = weibo_type
             else:
-                describe = u'转发微博' + describe
+                if weibo_type == 'original':
+                    describe = u'原创微博' + describe
+                else:
+                    describe = u'转发微博' + describe
+                
             logger.info(u'即将进行%s下载', describe)
             file_dir = self.get_filepath(file_type)
             file_dir = file_dir + os.sep + describe
@@ -1191,7 +1171,7 @@ class Weibo(object):
         finally:
             connection.close()
 
-    def mysql_create_database(self, mysql_config, sql):
+    def mysql_create_database(self):
         """创建MySQL数据库"""
         try:
             import pymysql
@@ -1200,38 +1180,91 @@ class Weibo(object):
                 u'系统中可能没有安装pymysql库，请先运行 pip install pymysql ，再运行程序')
             sys.exit()
         try:
-            if self.mysql_config:
-                mysql_config = self.mysql_config
+            mysql_config = self.mysql_config.copy()
+            db = mysql_config.pop('db')
+            sql = """CREATE DATABASE IF NOT EXISTS {db} DEFAULT
+                CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci""".format(db=db)
             connection = pymysql.connect(**mysql_config)
             self.mysql_create(connection, sql)
         except pymysql.OperationalError:
             logger.warning(u'系统中可能没有安装或正确配置MySQL数据库，请先根据系统环境安装或配置MySQL，再运行程序')
             sys.exit()
 
-    def mysql_create_table(self, mysql_config, sql):
+    def mysql_create_table(self, table):
         """创建MySQL表"""
         import pymysql
 
-        if self.mysql_config:
-            mysql_config = self.mysql_config
-        mysql_config['db'] = 'weibo'
+        mysql_config = self.mysql_config
+        prefix = self.mysql_prefix
+        if table == 'user':
+            sql = """
+                CREATE TABLE IF NOT EXISTS {prefix}user (
+                id varchar(20) NOT NULL,
+                screen_name varchar(30),
+                gender varchar(10),
+                statuses_count INT,
+                followers_count INT,
+                follow_count INT,
+                registration_time varchar(20),
+                sunshine varchar(20),
+                birthday varchar(40),
+                location varchar(200),
+                education varchar(200),
+                company varchar(200),
+                description varchar(400),
+                profile_url varchar(200),
+                profile_image_url varchar(200),
+                avatar_hd varchar(200),
+                urank INT,
+                mbrank INT,
+                verified BOOLEAN DEFAULT 0,
+                verified_type INT,
+                verified_reason varchar(140),
+                PRIMARY KEY (id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""".format(prefix=prefix)
+        elif table == 'weibo':
+            sql = """
+                CREATE TABLE IF NOT EXISTS {prefix}weibo (
+                id varchar(20) NOT NULL,
+                bid varchar(12) NOT NULL,
+                user_id varchar(20),
+                screen_name varchar(30),
+                text varchar(2000),
+                article_url varchar(100),
+                topics varchar(200),
+                at_users varchar(1000),
+                pics varchar(3000),
+                video_url varchar(1000),
+                location varchar(100),
+                created_at DATETIME,
+                source varchar(30),
+                attitudes_count INT,
+                comments_count INT,
+                reposts_count INT,
+                retweet_id varchar(20),
+                PRIMARY KEY (id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""".format(prefix=prefix)
+        else:
+            logger.warning(u'创建数据表失败: 错误的参数 table: %s', table)
+            sys.exit()
+        
         connection = pymysql.connect(**mysql_config)
         self.mysql_create(connection, sql)
 
-    def mysql_insert(self, mysql_config, table, data_list):
+    def mysql_insert(self, table, data_list):
         """向MySQL表插入或更新数据"""
         import pymysql
 
         if len(data_list) > 0:
             keys = ', '.join(data_list[0].keys())
             values = ', '.join(['%s'] * len(data_list[0]))
-            if self.mysql_config:
-                mysql_config = self.mysql_config
-            mysql_config['db'] = 'weibo'
+            mysql_config = self.mysql_config
+            prefix = self.mysql_prefix
             connection = pymysql.connect(**mysql_config)
             cursor = connection.cursor()
-            sql = """INSERT INTO {table}({keys}) VALUES ({values}) ON
-                     DUPLICATE KEY UPDATE""".format(table=table,
+            sql = """INSERT INTO {prefix}{table}({keys}) VALUES ({values}) ON
+                     DUPLICATE KEY UPDATE""".format(prefix=prefix,
+                                                    table=table,
                                                     keys=keys,
                                                     values=values)
             update = ','.join([
@@ -1251,36 +1284,8 @@ class Weibo(object):
 
     def weibo_to_mysql(self, wrote_count):
         """将爬取的微博信息写入MySQL数据库"""
-        mysql_config = {
-            'host': 'localhost',
-            'port': 3306,
-            'user': 'root',
-            'password': '123456',
-            'charset': 'utf8mb4'
-        }
         # 创建'weibo'表
-        create_table = """
-                CREATE TABLE IF NOT EXISTS weibo (
-                id varchar(20) NOT NULL,
-                bid varchar(12) NOT NULL,
-                user_id varchar(20),
-                screen_name varchar(30),
-                text varchar(2000),
-                article_url varchar(100),
-                topics varchar(200),
-                at_users varchar(1000),
-                pics varchar(3000),
-                video_url varchar(1000),
-                location varchar(100),
-                created_at DATETIME,
-                source varchar(30),
-                attitudes_count INT,
-                comments_count INT,
-                reposts_count INT,
-                retweet_id varchar(20),
-                PRIMARY KEY (id)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"""
-        self.mysql_create_table(mysql_config, create_table)
+        self.mysql_create_table('weibo')
         weibo_list = []
         retweet_list = []
         if len(self.write_mode) > 1:
@@ -1303,8 +1308,8 @@ class Weibo(object):
                 w['retweet_id'] = ''
             weibo_list.append(w)
         # 在'weibo'表中插入或更新微博数据
-        self.mysql_insert(mysql_config, 'weibo', retweet_list)
-        self.mysql_insert(mysql_config, 'weibo', weibo_list)
+        self.mysql_insert('weibo', retweet_list)
+        self.mysql_insert('weibo', weibo_list)
         logger.info(u'%d条微博写入MySQL数据库完毕', self.got_count)
 
     def weibo_to_sqlite(self, wrote_count):
