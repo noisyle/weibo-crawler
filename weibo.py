@@ -334,7 +334,7 @@ class Weibo(object):
         if weibo_info.get('pics'):
             pic_info = weibo_info['pics']
             pic_list = [pic['large']['url'] for pic in pic_info]
-            pics = ','.join(pic_list)
+            pics = ';'.join(pic_list)
         else:
             pics = ''
         return pics
@@ -464,8 +464,8 @@ class Weibo(object):
         file_prefix = w['created_at'][:11].replace('-', '') + '_' + str(
             w['id'])
         if file_type == 'img':
-            if ',' in urls:
-                url_list = urls.split(',')
+            if ';' in urls:
+                url_list = urls.split(';')
                 for i, url in enumerate(url_list):
                     index = url.rfind('.')
                     if len(url) - index >= 5:
