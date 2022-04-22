@@ -461,45 +461,49 @@ class Weibo(object):
 
     def handle_download(self, file_type, file_dir, urls, w):
         """处理下载相关操作"""
-        file_prefix = w['created_at'][:11].replace('-', '') + '_' + str(
-            w['id'])
-        if file_type == 'img':
-            if ';' in urls:
-                url_list = urls.split(';')
-                for i, url in enumerate(url_list):
-                    index = url.rfind('.')
-                    if len(url) - index >= 5:
-                        file_suffix = '.jpg'
-                    else:
-                        file_suffix = url[index:]
-                    file_name = file_prefix + '_' + str(i + 1) + file_suffix
-                    file_path = file_dir + os.sep + file_name
-                    self.download_one_file(url, file_path, file_type, w['id'])
-            else:
-                index = urls.rfind('.')
-                if len(urls) - index > 5:
-                    file_suffix = '.jpg'
-                else:
-                    file_suffix = urls[index:]
-                file_name = file_prefix + file_suffix
-                file_path = file_dir + os.sep + file_name
-                self.download_one_file(urls, file_path, file_type, w['id'])
-        else:
-            file_suffix = '.mp4'
-            if ';' in urls:
-                url_list = urls.split(';')
-                if url_list[0].endswith('.mov'):
-                    file_suffix = '.mov'
-                for i, url in enumerate(url_list):
-                    file_name = file_prefix + '_' + str(i + 1) + file_suffix
-                    file_path = file_dir + os.sep + file_name
-                    self.download_one_file(url, file_path, file_type, w['id'])
-            else:
-                if urls.endswith('.mov'):
-                    file_suffix = '.mov'
-                file_name = file_prefix + file_suffix
-                file_path = file_dir + os.sep + file_name
-                self.download_one_file(urls, file_path, file_type, w['id'])
+        base_dir = os.path.split(os.path.realpath(__file__))[0] + os.sep + 'media'
+        for i, url in enumerate(urls.split(';')):
+            file_name = url.split('//')[1].split('?')[0].replace('/','_')
+            self.download_one_file(url, base_dir + os.sep + file_name, file_type, w['id'])
+        # file_prefix = w['created_at'][:11].replace('-', '') + '_' + str(
+        #     w['id'])
+        # if file_type == 'img':
+        #     if ';' in urls:
+        #         url_list = urls.split(';')
+        #         for i, url in enumerate(url_list):
+        #             index = url.rfind('.')
+        #             if len(url) - index >= 5:
+        #                 file_suffix = '.jpg'
+        #             else:
+        #                 file_suffix = url[index:]
+        #             file_name = file_prefix + '_' + str(i + 1) + file_suffix
+        #             file_path = file_dir + os.sep + file_name
+        #             self.download_one_file(url, file_path, file_type, w['id'])
+        #     else:
+        #         index = urls.rfind('.')
+        #         if len(urls) - index > 5:
+        #             file_suffix = '.jpg'
+        #         else:
+        #             file_suffix = urls[index:]
+        #         file_name = file_prefix + file_suffix
+        #         file_path = file_dir + os.sep + file_name
+        #         self.download_one_file(urls, file_path, file_type, w['id'])
+        # else:
+        #     file_suffix = '.mp4'
+        #     if ';' in urls:
+        #         url_list = urls.split(';')
+        #         if url_list[0].endswith('.mov'):
+        #             file_suffix = '.mov'
+        #         for i, url in enumerate(url_list):
+        #             file_name = file_prefix + '_' + str(i + 1) + file_suffix
+        #             file_path = file_dir + os.sep + file_name
+        #             self.download_one_file(url, file_path, file_type, w['id'])
+        #     else:
+        #         if urls.endswith('.mov'):
+        #             file_suffix = '.mov'
+        #         file_name = file_prefix + file_suffix
+        #         file_path = file_dir + os.sep + file_name
+        #         self.download_one_file(urls, file_path, file_type, w['id'])
 
     def download_files(self, file_type, weibo_type, wrote_count):
         """下载文件(图片/视频)"""
@@ -525,6 +529,9 @@ class Weibo(object):
             file_dir = file_dir + os.sep + describe
             if not os.path.isdir(file_dir):
                 os.makedirs(file_dir)
+            base_dir = os.path.split(os.path.realpath(__file__))[0] + os.sep + 'media'
+            if not os.path.isdir(base_dir):
+                os.makedirs(base_dir)
             for w in tqdm(self.weibo[wrote_count:], desc='Download progress'):
                 if weibo_type == 'retweet':
                     if w.get('retweet'):
