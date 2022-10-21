@@ -91,7 +91,17 @@ class Weibo(object):
             "charset": "utf8mb4"
         })  # MySQL数据库连接配置，可以不填
         self.mysql_prefix = config.get('mysql_prefix') or ''
+
         user_id_list = config["user_id_list"]
+        # 尝试从远程加载id列表
+        if isinstance(config.get('config_url'), str):
+            self.config_url = config.get('config_url')
+        
+            r = requests.get(self.config_url + 'api/wb/ids', verify=False)
+            if r.status_code == 200 and r.json()["code"] == 200:
+                user_id_list = r.json()["result"]
+                logger.info(u'从远程获取id列表: %s', user_id_list)
+
         query_list = config.get("query_list") or []
         if isinstance(query_list, str):
             query_list = query_list.split(",")
@@ -153,13 +163,13 @@ class Weibo(object):
             sys.exit()
 
         # 验证write_mode
-        write_mode = ["csv", "json", "mongo", "mysql", "sqlite"]
+        write_mode = ["csv", "json", "mongo", "mysql", "sqlite", "remote"]
         if not isinstance(config["write_mode"], list):
             sys.exit("write_mode值应为list类型")
         for mode in config["write_mode"]:
             if mode not in write_mode:
                 logger.warning(
-                    "%s为无效模式，请从csv、json、mongo和mysql中挑选一个或多个作为write_mode", mode
+                    "%s为无效模式，请从csv、json、mongo、mysql和remote中挑选一个或多个作为write_mode", mode
                 )
                 sys.exit()
         # 验证运行模式
@@ -289,6 +299,48 @@ class Weibo(object):
         self.mysql_insert('user', [self.user])
         logger.info(u'%s信息写入MySQL数据库完毕', self.user['screen_name'])
 
+    def user_to_remote(self):
+        """将爬取的用户信息发送至远程"""
+        data = {
+            'id': self.user['id'],
+            'screenName': self.user['screen_name'],
+            'gender': self.user['gender'],
+            'statusesCount': self.user['statuses_count'],
+            'followersCount': self.user['followers_count'],
+            'followCount': self.user['follow_count'],
+            'registrationTime': self.user['registration_time'],
+            'sunshine': self.user['sunshine'],
+            'birthday': self.user['birthday'],
+            'location': self.user['location'],
+            'education': self.user['education'],
+            'company': self.user['company'],
+            'description': self.user['description'],
+            'profileUrl': self.user['profile_url'],
+            'profileImageUrl': self.user['profile_image_url'],
+            'avatarHd': self.user['avatar_hd'],
+            'urank': self.user['urank'],
+            'mbrank': self.user['mbrank'],
+            'verified': 1 if self.user['verified'] else 0,
+            'verifiedType': self.user['verified_type'],
+            'verifiedReason': self.user['verified_reason'],
+            'createTime': ''
+        }
+
+        s = requests.Session()
+        url = self.user['avatar_hd']
+        s.mount(url, HTTPAdapter(max_retries=5))
+        flag = True
+        try_count = 0
+        while flag and try_count < 5:
+            flag = False
+            downloaded = s.get(url, headers=self.headers, timeout=(5, 10), verify=False)
+            try_count += 1
+            if (url.endswith(("jpg", "jpeg")) and not downloaded.content.endswith(b"\xff\xd9")) or (url.endswith("png") and not downloaded.content.endswith(b"\xaeB`\x82")):
+                flag = True
+
+        r = requests.post(self.config_url + 'api/wb/user', data=data, files={'avatar': (url, downloaded.content)}, verify=False)
+        logger.info(u'%s信息发送至远程完毕', self.user['screen_name'])
+
     def user_to_database(self):
         """将用户信息写入文件/数据库"""
         self.user_to_csv()
@@ -298,18 +350,21 @@ class Weibo(object):
             self.user_to_mongodb()
         if "sqlite" in self.write_mode:
             self.user_to_sqlite()
+        if "remote" in self.write_mode:
+            self.user_to_remote()
 
     def get_user_info(self):
         """获取用户信息"""
         params = {"containerid": "100505" + str(self.user_config["user_id"])}
         # TODO 这里在读取下一个用户的时候很容易被ban，需要优化休眠时长
-        sleep(random.randint(60, 180))
+        # sleep(random.randint(60, 180))
         js, status_code = self.get_json(params)
         if status_code != 200:
             logger.info("被ban了，需要等待一段时间")
             sys.exit()
         if js["ok"]:
             info = js["data"]["userInfo"]
+            logger.info(js["data"])
             user_info = OrderedDict()
             user_info["id"] = self.user_config["user_id"]
             user_info["screen_name"] = info.get("screen_name", "")
@@ -1494,6 +1549,80 @@ class Weibo(object):
         self.mysql_insert('weibo', weibo_list)
         logger.info(u'%d条微博写入MySQL数据库完毕', self.got_count)
 
+    def remote_send(self, data_list):
+        """向远程发送数据"""
+        for data in data_list:
+            s = requests.Session()
+
+            # logger.info(u'id: %s, pics: %s', data['id'], data['pics'])
+
+            # 保存附件数据，包含图片和视频，发送推文信息的同时提交至远程
+            files = []
+            if(len(data['pics']) > 0):
+                for pic in data['pics'].split(','):
+                    url=pic
+                    # logger.info(u'下载图片 %s', url)
+                    s.mount(url, HTTPAdapter(max_retries=5))
+                    downloaded = s.get(url, headers=self.headers, timeout=(5, 10), verify=False)
+                    files.append(('pic', (url.split('?')[0], downloaded.content)))
+            if(len(data['video_url']) > 0):
+                url=data['video_url']
+                # logger.info(u'下载视频 %s', url)
+                s.mount(url, HTTPAdapter(max_retries=5))
+                downloaded = s.get(url, headers=self.headers, timeout=(5, 10), verify=False)
+                files.append(('vid', (url.split('?')[0], downloaded.content)))
+            weibo = {
+                'userId': data['user_id'],
+                'screenName': data['screen_name'],
+                'id': data['id'],
+                'bid': data['bid'],
+                'text': data['text'],
+                'articleUrl': data['article_url'],
+                'pics': data['pics'],
+                'videoUrl': data['video_url'],
+                'location': data['location'],
+                'createdAt': data['created_at'],
+                'source': data['source'],
+                'attitudesCount': data['attitudes_count'],
+                'commentsCount': data['comments_count'],
+                'repostsCount': data['reposts_count'],
+                'topics': data['topics'],
+                'atUsers': data['at_users'],
+                'retweetId': data['retweet_id'],
+                'createTime': ''
+            }
+            r = requests.post(self.config_url + 'api/wb/weibo', data=weibo, files=files, verify=False)
+            # logger.info(u'%s信息发送至远程完毕', weibo)
+
+
+    def weibo_to_remote(self, wrote_count):
+        """将爬取的微博信息发送至远程"""
+        weibo_list = []
+        retweet_list = []
+        if len(self.write_mode) > 1:
+            info_list = copy.deepcopy(self.weibo[wrote_count:])
+        else:
+            info_list = self.weibo[wrote_count:]
+        for w in info_list:
+            w["created_at"] = w["full_created_at"]
+            del w["full_created_at"]
+
+            if "retweet" in w:
+                r = w["retweet"]
+                r["retweet_id"] = ""
+                r["created_at"] = r["full_created_at"]
+                del r["full_created_at"]
+                retweet_list.append(r)
+                w["retweet_id"] = r["id"]
+                del w["retweet"]
+            else:
+                w["retweet_id"] = ""
+            weibo_list.append(w)
+        
+        self.remote_send(retweet_list)
+        self.remote_send(weibo_list)
+        logger.info(u'%d条微博发送至远程完毕', self.got_count)
+
     def weibo_to_sqlite(self, wrote_count):
         con = self.get_sqlite_connection()
         weibo_list = []
@@ -1827,6 +1956,9 @@ class Weibo(object):
                 self.weibo_to_mongodb(wrote_count)
             if "sqlite" in self.write_mode:
                 self.weibo_to_sqlite(wrote_count)
+            if "remote" in self.write_mode:
+                self.weibo_to_remote(wrote_count)
+                return
             if self.original_pic_download:
                 self.download_files("img", "original", wrote_count)
             if self.original_video_download:
